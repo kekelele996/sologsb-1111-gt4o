@@ -27,6 +27,28 @@ interface RunState {
   removeByHole: (holeId: string) => Promise<void>;
 }
 
+/** 由登记表单构造回次实体：进尺与采取率自动计算，并打上版本戳（编目台直录与离线队列共用） */
+export function buildRunEntity(input: RunInput, id: string, rev: number): DrillRun {
+  const footage = footageOf(input.fromDepth, input.toDepth);
+  return {
+    id,
+    runNo: input.runNo.trim(),
+    holeId: input.holeId,
+    fromDepth: Number(input.fromDepth) || 0,
+    toDepth: Number(input.toDepth) || 0,
+    footage,
+    coreLength: Number(input.coreLength) || 0,
+    recovery: recoveryOf(input.coreLength, footage),
+    waterLevel: Number(input.waterLevel) || 0,
+    shift: input.shift,
+    drilledAt: input.drilledAt,
+    recorder: input.recorder.trim(),
+    remark: input.remark?.trim() || undefined,
+    updatedAt: new Date().toISOString(),
+    rev,
+  };
+}
+
 /** 回次与采取率派生值：进尺与采取率均由起止深度、岩芯长度自动计算 */
 export const useRunStore = create<RunState>()((set, get) => ({
   runs: [],
@@ -38,22 +60,7 @@ export const useRunStore = create<RunState>()((set, get) => ({
   },
 
   addRun: async (input) => {
-    const footage = footageOf(input.fromDepth, input.toDepth);
-    const run: DrillRun = {
-      id: uid('run'),
-      runNo: input.runNo.trim(),
-      holeId: input.holeId,
-      fromDepth: Number(input.fromDepth) || 0,
-      toDepth: Number(input.toDepth) || 0,
-      footage,
-      coreLength: Number(input.coreLength) || 0,
-      recovery: recoveryOf(input.coreLength, footage),
-      waterLevel: Number(input.waterLevel) || 0,
-      shift: input.shift,
-      drilledAt: input.drilledAt,
-      recorder: input.recorder.trim(),
-      remark: input.remark?.trim() || undefined,
-    };
+    const run = buildRunEntity(input, uid('run'), 1);
     await db.runs.put(run);
     set({ runs: [run, ...get().runs] });
     return run;
@@ -68,6 +75,8 @@ export const useRunStore = create<RunState>()((set, get) => ({
       ...merged,
       footage,
       recovery: recoveryOf(merged.coreLength, footage),
+      updatedAt: new Date().toISOString(),
+      rev: current.rev + 1,
     };
     await db.runs.put(next);
     set({ runs: get().runs.map((r) => (r.id === id ? next : r)) });

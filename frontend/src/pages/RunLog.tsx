@@ -1,19 +1,23 @@
 import { useMemo, useState } from 'react';
-import { Alert, App as AntApp, Button, Card, Col, DatePicker, Form, Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Table, Typography } from 'antd';
+import { Alert, App as AntApp, Button, Card, Col, DatePicker, Form, Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Table, Tag, Typography } from 'antd';
 import type { TableColumnsType } from 'antd';
 import dayjs, { type Dayjs } from 'dayjs';
+import { Link } from 'react-router-dom';
 import StatBadge from '../components/common/StatBadge';
 import RecoveryBadge from '../components/common/RecoveryBadge';
 import DepthRangeInput from '../components/common/DepthRangeInput';
 import EmptyPanel from '../components/common/EmptyPanel';
 import { useDepthCalc } from '../hooks/useDepthCalc';
 import { useHoleStore } from '../stores/holeStore';
-import { useRunStore } from '../stores/runStore';
+import { useSyncStore } from '../stores/syncStore';
 import { SHIFTS } from '../types/drill-hole';
 import type { DrillRun, RunShift } from '../types/drill-run';
 import { footageOf, recoveryOf, validateRange } from '../utils/recovery';
 
 const { Title, Paragraph, Text } = Typography;
+
+/** 表格显示行：编目台记录叠加待同步标记 */
+type DisplayRun = DrillRun & { pendingKind?: 'upsert' | 'delete' };
 
 interface RunFormValues {
   runNo: string;
@@ -34,10 +38,9 @@ export default function RunLog() {
   const holes = useHoleStore((s) => s.holes);
   const currentHoleId = useHoleStore((s) => s.currentHoleId);
   const setCurrentHole = useHoleStore((s) => s.setCurrentHole);
-  const runs = useRunStore((s) => s.runs);
-  const addRun = useRunStore((s) => s.addRun);
-  const updateRun = useRunStore((s) => s.updateRun);
-  const removeRun = useRunStore((s) => s.removeRun);
+  const saveRun = useSyncStore((s) => s.saveRun);
+  const removeRun = useSyncStore((s) => s.removeRun);
+  const outbox = useSyncStore((s) => s.outbox);
   const { runsOf, summarize } = useDepthCalc();
 
   const [form] = Form.useForm<RunFormValues>();
@@ -50,19 +53,50 @@ export default function RunLog() {
   const holeOptions = holes.map((hole) => ({ label: `${hole.holeNo} · ${hole.rigNo}`, value: hole.id }));
   const activeHoleId = currentHoleId || holes[0]?.id || '';
   const summary = useMemo(() => summarize(activeHoleId), [summarize, activeHoleId]);
-  const tableRuns = useMemo(() => [...summary.runs].sort((a, b) => b.fromDepth - a.fromDepth), [summary.runs]);
+
+  /** 当前孔的待同步操作（断网期间在现场平板上登记的） */
+  const holePendingOps = useMemo(
+    () => outbox.filter((op) => op.kind.startsWith('run.') && op.holeId === activeHoleId),
+    [outbox, activeHoleId],
+  );
+
+  /** 待同步的回次登记内容（断网连续登记时，默认深度与重叠提示也要算入） */
+  const pendingHoleRuns = useMemo(
+    () =>
+      holePendingOps
+        .filter((op) => op.kind === 'run.upsert' && op.payload)
+        .map((op) => op.payload as DrillRun),
+    [holePendingOps],
+  );
+
+  /** 编目台记录 + 待同步叠加：断网登记的内容即时可见，未入台的标「待同步」 */
+  const tableRuns = useMemo<DisplayRun[]>(() => {
+    const opByEntity = new Map(holePendingOps.map((op) => [op.entityId, op]));
+    const deskRows: DisplayRun[] = summary.runs.map((run) => {
+      const op = opByEntity.get(run.id);
+      if (!op) return run;
+      if (op.kind === 'run.delete') return { ...run, pendingKind: 'delete' };
+      return { ...(op.payload as DrillRun), pendingKind: 'upsert' };
+    });
+    const deskIds = new Set(summary.runs.map((run) => run.id));
+    const queuedCreates: DisplayRun[] = holePendingOps
+      .filter((op) => op.kind === 'run.upsert' && !deskIds.has(op.entityId))
+      .map((op) => ({ ...(op.payload as DrillRun), pendingKind: 'upsert' }));
+    return [...deskRows, ...queuedCreates].sort((a, b) => b.fromDepth - a.fromDepth);
+  }, [summary.runs, holePendingOps]);
 
   const openCreate = () => {
     setEditing(null);
     form.resetFields();
     const hole = holes.find((h) => h.id === activeHoleId);
-    const nextFrom = summary.reachedDepth;
+    const pendingReached = pendingHoleRuns.reduce((max, run) => Math.max(max, run.toDepth), 0);
+    const nextFrom = Number(Math.max(summary.reachedDepth, pendingReached).toFixed(2));
     const nextTo = Number((nextFrom + 5).toFixed(2));
     const prefix = (hole?.holeNo ?? 'ZK').replace(/^ZK-/, '');
     setRange({ from: nextFrom, to: nextTo });
     setLiveCore(Number((5 * 0.9).toFixed(2)));
     form.setFieldsValue({
-      runNo: `${prefix}-${String(summary.runCount + 1).padStart(2, '0')}`,
+      runNo: `${prefix}-${String(summary.runCount + pendingHoleRuns.length + 1).padStart(2, '0')}`,
       holeId: activeHoleId,
       fromDepth: nextFrom,
       toDepth: nextTo,
@@ -115,18 +149,38 @@ export default function RunLog() {
     };
     const footage = footageOf(payload.fromDepth, payload.toDepth);
     const recovery = recoveryOf(payload.coreLength, footage);
-    if (editing) {
-      await updateRun(editing.id, payload);
-      message.success(`已更新回次 ${payload.runNo}，进尺 ${footage}m，采取率 ${recovery}%`);
+    const result = await saveRun(payload, editing?.id);
+    if (result.queued) {
+      message.info(`已登记回次 ${payload.runNo}（待同步）：断网期间保存在本机队列，网络恢复后自动并入编目台`);
     } else {
-      await addRun(payload);
-      message.success(`已录入回次 ${payload.runNo}，进尺 ${footage}m，采取率 ${recovery}%`);
+      message.success(`${editing ? '已更新' : '已录入'}回次 ${payload.runNo}，进尺 ${footage}m，采取率 ${recovery}%`);
     }
     setOpen(false);
   };
 
-  const columns: TableColumnsType<DrillRun> = [
+  const handleRemove = async (record: DrillRun) => {
+    const result = await removeRun(record.id);
+    if (result.queued) {
+      message.info(`删除回次 ${record.runNo} 已记入待同步队列，网络恢复后生效`);
+    } else {
+      message.success('已删除');
+    }
+  };
+
+  const columns: TableColumnsType<DisplayRun> = [
     { title: '回次号', dataIndex: 'runNo', width: 110, render: (v: string) => <Text strong>{v}</Text> },
+    {
+      title: '状态',
+      width: 90,
+      render: (_, row) =>
+        row.pendingKind === 'delete' ? (
+          <Tag color="red">待删除</Tag>
+        ) : row.pendingKind === 'upsert' ? (
+          <Tag color="orange">待同步</Tag>
+        ) : (
+          <Tag color="green">已入台</Tag>
+        ),
+    },
     { title: '深度区间(m)', width: 140, render: (_, row) => `${row.fromDepth}~${row.toDepth}` },
     { title: '进尺(m)', dataIndex: 'footage', width: 100, align: 'right' },
     { title: '岩芯长度(m)', dataIndex: 'coreLength', width: 120, align: 'right' },
@@ -140,23 +194,39 @@ export default function RunLog() {
       title: '操作',
       width: 140,
       fixed: 'right',
-      render: (_, record) => (
-        <Space size={2}>
-          <Button size="small" type="link" onClick={() => openEdit(record)}>
-            编辑
-          </Button>
-          <Popconfirm title={`确认删除回次 ${record.runNo}？`} onConfirm={() => removeRun(record.id).then(() => message.success('已删除'))}>
-            <Button size="small" type="link" danger>
-              删除
+      render: (_, record) =>
+        record.pendingKind ? (
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            同步后可改
+          </Text>
+        ) : (
+          <Space size={2}>
+            <Button size="small" type="link" onClick={() => openEdit(record)}>
+              编辑
             </Button>
-          </Popconfirm>
-        </Space>
-      ),
+            <Popconfirm title={`确认删除回次 ${record.runNo}？`} onConfirm={handleRemove.bind(null, record)}>
+              <Button size="small" type="link" danger>
+                删除
+              </Button>
+            </Popconfirm>
+          </Space>
+        ),
     },
   ];
 
   const previewFootage = footageOf(range.from, range.to);
   const previewRecovery = recoveryOf(liveCore, previewFootage);
+
+  /** 深度区间输入的参照回次：编目台记录 + 待同步登记（待同步编辑覆盖同 id 记录） */
+  const watchedHoleId = Form.useWatch('holeId', form) ?? activeHoleId;
+  const referenceRuns = useMemo(() => {
+    const desk = runsOf(watchedHoleId);
+    const pending = outbox
+      .filter((op) => op.kind === 'run.upsert' && op.holeId === watchedHoleId && op.payload)
+      .map((op) => op.payload as DrillRun);
+    const pendingIds = new Set(pending.map((run) => run.id));
+    return [...desk.filter((run) => !pendingIds.has(run.id)), ...pending];
+  }, [runsOf, watchedHoleId, outbox]);
 
   return (
     <div>
@@ -196,11 +266,25 @@ export default function RunLog() {
         </Col>
       </Row>
 
+      {holePendingOps.length > 0 ? (
+        <Alert
+          style={{ marginBottom: 12 }}
+          type="warning"
+          showIcon
+          message={`${holePendingOps.length} 条回次登记待同步：断网期间保存在本机队列，网络恢复后自动并入编目台`}
+          action={
+            <Link to="/sync">
+              <Button size="small">去同步中心</Button>
+            </Link>
+          }
+        />
+      ) : null}
+
       {tableRuns.length === 0 ? (
         <EmptyPanel description="该孔暂无回次记录" actionText="录入回次" onAction={openCreate} />
       ) : (
         <Card size="small">
-          <Table rowKey="id" size="small" columns={columns} dataSource={tableRuns} pagination={{ pageSize: 10 }} scroll={{ x: 1300 }} />
+          <Table rowKey="id" size="small" columns={columns} dataSource={tableRuns} pagination={{ pageSize: 10 }} scroll={{ x: 1390 }} />
         </Card>
       )}
 
@@ -228,9 +312,9 @@ export default function RunLog() {
             <DepthRangeInput
               fromDepth={range.from}
               toDepth={range.to}
-              referenceRuns={runsOf(Form.useWatch('holeId', form) ?? activeHoleId)}
+              referenceRuns={referenceRuns}
               ignoreRunId={editing?.id}
-              maxDepth={holes.find((h) => h.id === (Form.useWatch('holeId', form) ?? activeHoleId))?.designDepth}
+              maxDepth={holes.find((h) => h.id === watchedHoleId)?.designDepth}
               onChange={(patch) => {
                 setRange((prev) => ({ ...prev, ...patch }));
                 form.setFieldsValue(patch as unknown as RunFormValues);

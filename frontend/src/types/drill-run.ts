@@ -28,6 +28,10 @@ export interface DrillRun {
   recorder: string;
   /** 备注 */
   remark?: string;
+  /** 最后修改时间 ISO（同步冲突判定用） */
+  updatedAt: string;
+  /** 版本号，每次写入递增 */
+  rev: number;
 }
 
 /** 采取率分级 */

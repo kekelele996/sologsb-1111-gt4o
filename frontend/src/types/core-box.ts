@@ -23,6 +23,10 @@ export interface CoreBox {
   operator: string;
   /** 备注 */
   remark?: string;
+  /** 最后修改时间 ISO（同步冲突判定用） */
+  updatedAt: string;
+  /** 版本号，每次写入递增 */
+  rev: number;
 }
 
 /** 岩芯箱与回次的连续性校验结果 */

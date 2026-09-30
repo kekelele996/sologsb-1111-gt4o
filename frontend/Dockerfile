@@ -4,7 +4,7 @@ FROM node:20-alpine AS builder
 WORKDIR /app
 
 # 先复制依赖清单，充分利用镜像层缓存
-COPY package.json ./
+COPY package.json package-lock.json ./
 
 # 使用 npm ci 保证依赖可复现；无 lock 文件时回退到 npm install
 RUN if [ -f package-lock.json ]; then npm ci --no-audit --no-fund; else npm install --no-audit --no-fund; fi

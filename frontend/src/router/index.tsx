@@ -6,6 +6,7 @@ import HoleList from '../pages/HoleList';
 import RunLog from '../pages/RunLog';
 import CoreBoxList from '../pages/CoreBoxList';
 import LithoEditor from '../pages/LithoEditor';
+import SyncCenter from '../pages/SyncCenter';
 
 function NotFound() {
   return (
@@ -22,7 +23,7 @@ function NotFound() {
   );
 }
 
-/** 全部路由：工作台 + 钻孔台帐 / 回次记录 / 岩芯箱 / 岩性编录 */
+/** 全部路由：工作台 + 钻孔台帐 / 回次记录 / 岩芯箱 / 岩性编录 / 同步中心 */
 export const routes: RouteObject[] = [
   {
     path: '/',
@@ -33,6 +34,7 @@ export const routes: RouteObject[] = [
       { path: 'runs', element: <RunLog /> },
       { path: 'boxes', element: <CoreBoxList /> },
       { path: 'lithology', element: <LithoEditor /> },
+      { path: 'sync', element: <SyncCenter /> },
       { path: '*', element: <NotFound /> },
     ],
   },
