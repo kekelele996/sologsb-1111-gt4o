@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { db } from '../utils/db';
 import { uid } from '../utils/id';
+import { localDelete, localPut } from '../sync/outbox';
 import type { Alteration, LithoLog, Lithology, Mineralization, RangeConflict } from '../types/litho-log';
 import { findConflicts } from '../utils/recovery';
 
@@ -75,7 +76,7 @@ export const useLithoStore = create<LithoState>()((set, get) => ({
       logger: input.logger.trim(),
       remark: input.remark?.trim() || undefined,
     };
-    await db.lithos.put(log);
+    await localPut('litho', log);
     set({ lithos: [...get().lithos, log] });
     return { log, conflicts: [] };
   },
@@ -89,13 +90,13 @@ export const useLithoStore = create<LithoState>()((set, get) => ({
       return { conflicts };
     }
     const next: LithoLog = { ...merged };
-    await db.lithos.put(next);
+    await localPut('litho', next);
     set({ lithos: get().lithos.map((l) => (l.id === id ? next : l)) });
     return { log: next, conflicts: [] };
   },
 
   removeLitho: async (id) => {
-    await db.lithos.delete(id);
+    await localDelete('litho', id);
     set({ lithos: get().lithos.filter((l) => l.id !== id) });
   },
 }));

@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { db } from '../utils/db';
 import { uid } from '../utils/id';
+import { localDelete, localPut } from '../sync/outbox';
 import type { CoreBox } from '../types/core-box';
 
 export interface BoxInput {
@@ -53,7 +54,7 @@ export const useBoxStore = create<BoxState>()((set, get) => ({
       operator: input.operator.trim(),
       remark: input.remark?.trim() || undefined,
     };
-    await db.boxes.put(box);
+    await localPut('box', box);
     set({ boxes: [...get().boxes, box] });
     return box;
   },
@@ -62,12 +63,12 @@ export const useBoxStore = create<BoxState>()((set, get) => ({
     const current = get().boxes.find((b) => b.id === id);
     if (!current) return;
     const next: CoreBox = { ...current, ...patch };
-    await db.boxes.put(next);
+    await localPut('box', next);
     set({ boxes: get().boxes.map((b) => (b.id === id ? next : b)) });
   },
 
   removeBox: async (id) => {
-    await db.boxes.delete(id);
+    await localDelete('box', id);
     set({ boxes: get().boxes.filter((b) => b.id !== id) });
   },
 
@@ -78,7 +79,7 @@ export const useBoxStore = create<BoxState>()((set, get) => ({
       ? current.damagedSlots.filter((s) => s !== slot)
       : [...current.damagedSlots, slot].sort((a, b) => a - b);
     const next: CoreBox = { ...current, damagedSlots };
-    await db.boxes.put(next);
+    await localPut('box', next);
     set({ boxes: get().boxes.map((b) => (b.id === id ? next : b)) });
   },
 }));

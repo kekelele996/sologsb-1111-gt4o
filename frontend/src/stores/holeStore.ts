@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { db } from '../utils/db';
 import { uid } from '../utils/id';
+import { localDelete, localPut } from '../sync/outbox';
 import type { DrillHole, HoleProgress, SurveyPoint } from '../types/drill-hole';
 import type { DrillRun } from '../types/drill-run';
 import { buildHoleProgress } from '../utils/recovery';
@@ -62,7 +63,7 @@ export const useHoleStore = create<HoleState>()((set, get) => ({
       surveyData: input.surveyData,
       remark: input.remark?.trim() || undefined,
     };
-    await db.holes.put(hole);
+    await localPut('hole', hole);
     set({ holes: [...get().holes, hole].sort((a, b) => a.holeNo.localeCompare(b.holeNo)), currentHoleId: hole.id });
     return hole;
   },
@@ -71,12 +72,12 @@ export const useHoleStore = create<HoleState>()((set, get) => ({
     const current = get().holes.find((h) => h.id === id);
     if (!current) return;
     const next: DrillHole = { ...current, ...patch };
-    await db.holes.put(next);
+    await localPut('hole', next);
     set({ holes: get().holes.map((h) => (h.id === id ? next : h)) });
   },
 
   removeHole: async (id) => {
-    await db.holes.delete(id);
+    await localDelete('hole', id);
     set({ holes: get().holes.filter((h) => h.id !== id) });
   },
 

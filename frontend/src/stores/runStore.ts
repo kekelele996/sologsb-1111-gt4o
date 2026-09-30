@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { db } from '../utils/db';
 import { uid } from '../utils/id';
+import { localDelete, localPut } from '../sync/outbox';
 import type { DrillRun, RunAnomaly, RunShift } from '../types/drill-run';
 import { footageOf, gradeOf, isAnomaly, recoveryOf, RECOVERY_GRADE_TEXT } from '../utils/recovery';
 
@@ -54,7 +55,7 @@ export const useRunStore = create<RunState>()((set, get) => ({
       recorder: input.recorder.trim(),
       remark: input.remark?.trim() || undefined,
     };
-    await db.runs.put(run);
+    await localPut('run', run);
     set({ runs: [run, ...get().runs] });
     return run;
   },
@@ -69,18 +70,18 @@ export const useRunStore = create<RunState>()((set, get) => ({
       footage,
       recovery: recoveryOf(merged.coreLength, footage),
     };
-    await db.runs.put(next);
+    await localPut('run', next);
     set({ runs: get().runs.map((r) => (r.id === id ? next : r)) });
   },
 
   removeRun: async (id) => {
-    await db.runs.delete(id);
+    await localDelete('run', id);
     set({ runs: get().runs.filter((r) => r.id !== id) });
   },
 
   removeByHole: async (holeId) => {
     const ids = get().runs.filter((r) => r.holeId === holeId).map((r) => r.id);
-    await db.runs.bulkDelete(ids);
+    await Promise.all(ids.map((id) => localDelete('run', id)));
     set({ runs: get().runs.filter((r) => r.holeId !== holeId) });
   },
 }));
